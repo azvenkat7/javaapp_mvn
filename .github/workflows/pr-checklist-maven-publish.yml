@@ -1,0 +1,63 @@
+name: Maven Package
+
+on:
+  push:
+    branches:
+      - "*"
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches:
+      - "*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up JDK 11
+      uses: actions/setup-java@v4
+      with:
+        java-version: '11'
+        distribution: 'temurin'
+        server-id: github
+        settings-path: ${{ github.workspace }}
+
+    - name: Build with Maven
+      id: maven-build
+      run: |
+        mvn -B package --file pom.xml
+        
+    - name: Generate checklist results
+      run: |
+        # Initialize the checklist
+        checklist="Automated PR Checklist Results:\n- Build with Maven: []"
+
+        # Check if the Maven build step was successful
+        if [[ -f target/* ]]; then
+          checklist="${checklist//\[ \]/\[x\]}"
+          echo "Maven build was successful."
+        else
+          echo "Maven build failed."
+        fi
+        
+        echo "Checklist:\n$checklist"  # Debugging output for checklist
+        echo "checklist=$checklist" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Debug checklist output
+      run: echo -e "Checklist after generation:\n${{ env.checklist }}"
+      shell: bash
+
+    - name: Post checklist results
+      if: github.event_name == 'pull_request'
+      run: |
+        checklist="${{ env.checklist }}"
+        body="{\"body\": \"${checklist}\"}"
+        url="https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments"
+        curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -d "$body" "$url"

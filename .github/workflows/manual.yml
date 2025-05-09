@@ -1,0 +1,77 @@
+name: Manual workflow to deploy into Azure Env.
+
+on:
+  workflow_dispatch:
+    # Inputs the workflow accepts
+    inputs:
+      environment:
+        description: 'Choose the environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - QA
+          - PRE
+          - UAT
+      docker_tag:
+        description: 'Tag of the Docker image to deploy'
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    env:
+      GITHUB_TOKEN: ${{ secrets.MY_PAT }}
+      GITHUB_ACTOR: ${{ secrets.MY_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      
+    steps:
+      - name: Set environment-specific variables
+        id: set_vars
+        run: |
+          echo "Environment: ${{ github.event.inputs.environment }}"
+          echo "Docker Tag: ${{ github.event.inputs.docker_tag }}"
+          if ("${{ github.event.inputs.environment }}" -eq 'QA') {
+            echo "ACR_NAME=${{ secrets.ACR_NAME }}" >> $GITHUB_ENV
+            echo "SUBSCRIPTION=${{ secrets.QA_SUBSCRIPTION }}" >> $GITHUB_ENV
+            echo "RESOURCE_GROUP=rg-default-tp2a-dev-eastus2" >> $GITHUB_ENV
+            echo "AKS_NAME=clstr-tp2a-dev-eastus2" >> $GITHUB_ENV
+            echo "AZURE_CLIENT_ID=${{ secrets.AZURE_SP_APP_ID }}" >> $GITHUB_ENV
+            echo "AZURE_CLIENT_SECRET=${{ secrets.AZURE_SP_PASSWORD }}" >> $GITHUB_ENV
+          } elseif ("${{ github.event.inputs.environment }}" -eq 'UAT') {
+            echo "ACR_NAME=${{ secrets.UAT_ACR_NAME }}" >> $GITHUB_ENV
+            echo "SUBSCRIPTION=${{ secrets.UAT_SUBSCRIPTION }}" >> $GITHUB_ENV
+            echo "RESOURCE_GROUP=rg-default-tp2-uat-eastus2" >> $GITHUB_ENV
+            echo "AKS_NAME=aks-tp2a-uat-eastus2-001" >> $GITHUB_ENV
+            echo "AZURE_CLIENT_ID=${{ secrets.UAT_AZURE_SP_APP_ID }}" >> $GITHUB_ENV
+            echo "AZURE_CLIENT_SECRET=${{ secrets.UAT_AZURE_SP_PASSWORD }}" >> $GITHUB_ENV
+
+          # Debugging
+          echo "ACR_NAME: ${ACR_NAME}"
+          echo "SUBSCRIPTION: ${SUBSCRIPTION}"
+          echo "RESOURCE_GROUP: ${RESOURCE_GROUP}"
+          echo "AKS_NAME: ${AKS_NAME}"
+          echo "AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}"
+          echo "AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET}"
+
+      - name: Login to Azure
+        run: |
+          az login --service-principal -u "${{ env.AZURE_CLIENT_ID }}" -p "${{ env.AZURE_CLIENT_SECRET }}" --tenant "${{ env.AZURE_TENANT_ID }}"
+          az account set --subscription "${{ env.SUBSCRIPTION }}"
+          az account show --query "name"  # This shows the subscription which we were logged in to
+
+      - name: Login to Azure Container Registry
+        run: az acr login --name "${{ env.ACR_NAME }}"
+
+      - name: Get AKS credentials
+        run: az aks get-credentials --resource-group "${{ env.RESOURCE_GROUP }}" --name "${{ env.AKS_NAME }}" --admin
+
+      - name: Deploy to AKS
+        run: |
+          kubectl set image deployment/user-service user-service="${{ env.ACR_NAME }}".azurecr.io/"${{ github.event.inputs.docker_tag }}"
+          kubectl rollout status deployment/user-service
